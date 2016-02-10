@@ -1,0 +1,158 @@
+#! /bin/bash  
+#=================================================================
+# 模块控制脚本
+#	 USAGE:  sh $0 [start|stop|restart] [|all|modulenames]
+#==================================================================
+
+SUPERVISE_DIR="$HOME/.jumbo/bin" #supervise 程序路径名
+
+version="0.0.2"
+build_time="2015-03-09"
+
+script_path="$(cd $(dirname "$0"); pwd -P)"
+script_name="$(basename $0)"
+program_name=$(echo "${script_name}" | sed 's/\([[:alnum:]]\+\)_control$/\1/')
+
+
+[[ ! -f "$script_path" ]] && module_dir="$(dirname $script_path)" #模块路径名
+function check_limit(){
+	user="$(echo $USER)"
+	suser=$(ls -l ${script_path}/${script_name} | awk '{print $3}'|head -n 1)
+	if [  "$user" != "$suser" ] && [ "$user" != "root" ]
+	then
+		echo "$user can't execute ${script_name}"; exit
+	fi	
+}
+
+check_limit
+function print_version() {
+cat <<-print_version
+        ${script_name} ${version}
+        Copyright Baidu Inc.
+print_version
+}
+
+function usage() {
+
+cat <<-usage
+        Usage: ${script_name} [init|start|stop|restart|health|reload|shutdown|status]
+usage
+}
+
+
+##################################
+#功能:判断当前用户是否有权限对模块进行启停操作
+###################################
+function check_pro_limit(){
+	local flag module pro_dir super_dir user pro_user
+	module="$1"
+	dir="$2"
+        super_dir="${STATUS_DIR}/${module}"		
+	pro_dir="$dir/${module}"
+	user="$(echo $USER)"
+	pro_user=$(ps auxw |grep "${super_dir}\>" |awk '{print $1}' |head -n 1)
+	if [ -z "$pro_user" ];then	
+		pro_user=$(ps auxw |grep "${pro_dir}\>" |awk '{print $1}' |head -n 1)
+	fi
+	if [  "$pro_user" != "$user"  ] && [ "$user" != "root" ]
+	then
+		return 1 
+	else
+		return 0
+	fi
+	
+}
+command_input=$1
+if [ $# -eq 1 ]
+then
+        mod="all"
+elif [ $# -eq 2 ]
+then
+        mod="$2"
+elif [ $# -eq 3 ]
+then
+        mod="$2"
+        methd="$3"
+else
+        usage
+        exit 1
+fi
+## 根据不同的参数选择不同的接口行为
+if [ ! -f "${module_dir}/conf/supervisord.conf" ]; then
+	echo "${module_dir}/conf/supervisord.conf not exist"
+fi
+case X"${command_input}" in
+    Xinit)
+		cd ${module_dir}>/dev/null
+		${SUPERVISE_DIR}/supervisord -c ${module_dir}/conf/supervisord.conf
+		cd ->/dev/null
+	;;
+    Xstart)
+		cd ${module_dir}>/dev/null
+		if [ ! -S "${module_dir}/supervisor.sock" ]; then
+			${SUPERVISE_DIR}/supervisord -c ${module_dir}/conf/supervisord.conf
+			echo "${program_name} : started"
+		else
+			${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf start ${program_name}
+		fi
+		cd ->/dev/null
+        ;;
+    Xstop)
+		cd ${module_dir}>/dev/null
+		${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf stop ${program_name}
+		${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf  shutdown
+		cd ->/dev/null
+        ;;
+    Xrestart)
+		cd ${module_dir}>/dev/null
+		if [ ! -S "${module_dir}/supervisor.sock" ]; then
+			${SUPERVISE_DIR}/supervisord -c ${module_dir}/conf/supervisord.conf
+			echo "${program_name} : started"
+		else
+			${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf restart ${program_name}
+		fi
+		cd ->/dev/null
+        ;;
+    Xreload)
+		cd ${module_dir}>/dev/null
+       	        ${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf reload ${program_name}
+		cd ->/dev/null
+        ;;
+    Xstatus)
+		cd ${module_dir}>/dev/null
+        	${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf status ${program_name}
+		cd ->/dev/null
+        ;;
+    Xhealth)
+		cd ${module_dir}>/dev/null
+        	${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf status ${program_name}
+		cd ->/dev/null
+        ;;
+
+    Xcleanup)
+        	echo "no operation"
+        ;;
+    Xcheck)
+                cd ${module_dir}>/dev/null
+                ${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf status ${program_name}
+                cd ->/dev/null
+        ;;
+    Xshutdown)
+		cd ${module_dir}>/dev/null
+		${SUPERVISE_DIR}/supervisorctl -c ${module_dir}/conf/supervisord.conf  shutdown
+		cd ->/dev/null
+	;;
+    Xhelp)
+        usage
+        ;;
+    Xversion)
+        print_version
+        ;;
+    *)
+        usage
+        exit 1
+        ;; 
+esac
+
+exit $c_flag
+
