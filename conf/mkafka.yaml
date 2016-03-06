@@ -1,0 +1,25 @@
+ENV: 
+    KafkaToolDir: /home/platform/cloudera/parcels/KAFKA/lib/kafka/bin/
+    JAVAHOME: /usr/java/jdk1.7.0_67-cloudera
+LOG:
+    LogFormat: topic:%s consumer:%s partition:%v logsize:%v offset:%v lag:%v cluster:%s 
+Monitor:
+    - blcs
+    - do
+Cluster:
+    do:
+        ZNode: /do-kafka
+        ZKList:
+            - zookeeper.do.baidu.com:80
+        SetLag:
+            - { Consumer: place_cater_waimaiui_lsp, Lag: 30}
+    blcs:
+        ZNode: /home/map/ZNode
+        ZKList:
+            - gzhxy-waimai-logistics-arch00.gzhxy:2181
+            - gzhxy-waimai-logistics-arch01.gzhxy.baidu.com:2181
+            - gzhxy-waimai-logistics-arch02.gzhxy.baidu.com:2181
+            - gzhxy-waimai-logistics-arch03.gzhxy.baidu.com:2181
+            - gzhxy-waimai-logistics-arch04.gzhxy.baidu.com:2181
+        SetLag:
+            - {Consumer: blcs-channel-1001, Lag: 20}
