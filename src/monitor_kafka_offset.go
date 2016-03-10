@@ -317,14 +317,11 @@ func checkExist(filename string) bool {
 func syncLogger() {
 
 	var LogConfig = `
-<seelog minlevel="trace">
+<seelog minlevel="info">
     <outputs formatid="common">
-        <rollingfile type="size" filename="` + cmdPath + `/../log/mkafka.log" maxsize="1000000" maxrolls="5"/>
+        <rollingfile type="date" filename="` + cmdPath + `/../log/mkafka.log" datepattern="2006010215" maxrolls="30"/>
         <filter levels="critical">
             <file path="` + cmdPath + `/../log/mkafka.log.wf" formatid="critical"/>
-        </filter>
-        <filter levels="warn">
-            <console formatid="colored"/>
         </filter>
     </outputs>
     <formats>
