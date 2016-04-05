@@ -102,7 +102,8 @@ func main() {
 
 	for {
 		realMain(kafka)
-		time.Sleep(30 * time.Second)
+		// 可以配置并发数量与间隔时间.
+		time.Sleep(60 * time.Second)
 	}
 }
 
@@ -112,7 +113,7 @@ func realMain(m []MKafka) {
 	for _, v := range m {
 
 		v.Consumers = GetConsumsers(v.ZNode, v.zkc)
-
+		//控制并发数量.
 		for _, consumer := range v.Consumers {
 			log.Infof("get consumser %v", consumer)
 			go v.checkConsumer(consumer)
