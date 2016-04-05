@@ -334,6 +334,7 @@ func (mk MKafka) Do(job *Job) {
 	//线程控制执行时间
 	select {
 	case <-time.After(mk.TimeWait):
+		log.Errorf("[TimeOver] job: %v ", jobstring)
 		//超时被杀时
 		if err := cmd.Process.Kill(); err != nil {
 			//超时被杀失败
