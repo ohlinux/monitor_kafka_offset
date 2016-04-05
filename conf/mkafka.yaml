@@ -1,8 +1,12 @@
-ENV: 
+ENV:
     KafkaToolDir: /home/platform/cloudera/parcels/KAFKA/lib/kafka/bin/
     JAVAHOME: /usr/java/jdk1.7.0_67-cloudera
+    Concurrent: 20
+    TimeWait: 20s
+    TimeInterval: 1s
+    Collect: 60s  
 LOG:
-    LogFormat: topic:%s consumer:%s partition:%v logsize:%v offset:%v lag:%v cluster:%s 
+    LogFormat: topic:%s consumer:%s partition:%v logsize:%v offset:%v lag:%v cluster:%s
 Monitor:
     - blcs
     - do

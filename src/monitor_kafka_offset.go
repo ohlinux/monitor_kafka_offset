@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// AppVersion app version
 const AppVersion = "Version 0.1.20160305"
 
 // Version 0.0.201512141923  : the first version
@@ -29,8 +31,11 @@ var cmdPath string
 var c Conf
 
 var (
-	SUDO_USER  = os.Getenv("SUDO_USER")
-	USERNAME   = os.Getenv("username")
+	// SUDOUSER sudo切换的用户
+	SUDOUSER = os.Getenv("SUDO_USER")
+	// USERNAME 本地运行的账户
+	USERNAME = os.Getenv("username")
+	// HOME $HOME 位置
 	HOME       = os.Getenv("HOME")
 	configFile = flag.String("C", "mkafka.conf", "configure file.")
 	usage      = `
@@ -39,18 +44,43 @@ var (
 `
 )
 
+// MKafka Monitor Kafka程序的主要数据结构
 type MKafka struct {
 	ZKList    []string
 	ZNode     string
 	ToolDir   string
 	LogFormat string
-	Topics    []string
-	Consumers []string
 	zkc       *zk.Conn
 	SetLag    map[string]int64
 	Cluster   string
+
+	JobList      []ConsumerTopic
+	Concurrent   int
+	TimeWait     time.Duration
+	TimeInterval time.Duration
+	Collect      time.Duration
 }
 
+// Job 任务数据结构
+type Job struct {
+	jobname ConsumerTopic
+	results chan<- Result
+}
+
+// ConsumerTopic consumer and Topic as a job
+type ConsumerTopic struct {
+	Consumer string
+	Topic    string
+}
+
+// Result job处理结果
+type Result struct {
+	jobname    string
+	resultcode int
+	resultinfo string
+}
+
+// Offset 脚本运行后的数据结构
 type Offset struct {
 	Group   string
 	Topic   string
@@ -61,6 +91,7 @@ type Offset struct {
 	Owner   string
 }
 
+// Conf 配置文件的数据结构
 type Conf struct {
 	ENV     Env              `yaml:"ENV"`
 	LOG     Log              `yaml:"LOG"`
@@ -68,21 +99,29 @@ type Conf struct {
 	Cluster map[string]Kafka `yaml:"Cluster"`
 }
 
+// Env 服务运行的一交
 type Env struct {
-	KafkaToolDir string `yaml:"KafkaToolDir"`
-	JAVAHOME     string `yaml:"JAVAHOME"`
+	KafkaToolDir string        `yaml:"KafkaToolDir"`
+	JAVAHOME     string        `yaml:"JAVAHOME"`
+	Concurrent   int           `yaml:"Concurrent"`
+	TimeWait     time.Duration `yaml:"TimeWait"`
+	TimeInterval time.Duration `yaml:"TimeInterval"`
+	Collect      time.Duration `yaml:"Collect"`
 }
 
+// Log 配置文件中日志格式
 type Log struct {
 	LogFormat string `yaml:"LogFormat"`
 }
 
+// Kafka 连接Kafka的数据结构
 type Kafka struct {
 	ZNode  string   `yaml:"ZNode"`
 	ZKList []string `yaml:"ZKList"`
 	SetLag []Lag    `yaml:"SetLag"`
 }
 
+// Lag consumer的延迟数据结构
 type Lag struct {
 	Consumer string `yaml:"Consumer"`
 	Lag      int64  `yaml:"Lag"`
@@ -98,31 +137,50 @@ func main() {
 	syncLogger()
 
 	//获取相关信息
-	kafka := NewMKafka()
+	kafka, t := NewMKafka()
 
 	for {
-		realMain(kafka)
-		// 可以配置并发数量与间隔时间.
-		time.Sleep(60 * time.Second)
-	}
-}
 
-func realMain(m []MKafka) {
+		for n, m := range kafka {
 
-	//根据consumer检查offset
-	for _, v := range m {
+			fmt.Printf("[%v] start collect kafka information %v \n", n, m)
 
-		v.Consumers = GetConsumsers(v.ZNode, v.zkc)
-		//控制并发数量.
-		for _, consumer := range v.Consumers {
-			log.Infof("get consumser %v", consumer)
-			go v.checkConsumer(consumer)
+			realMain(m)
+			// 可以配置并发数量与间隔时间.
+
 		}
-
+		time.Sleep(t)
 	}
 }
 
-func NewMKafka() []MKafka {
+func realMain(mkafka MKafka) {
+
+	consumers, err := GetConsumsers(mkafka.ZNode, mkafka.zkc)
+	if err != nil {
+		log.Errorf("get consumers %v error: %v", mkafka.ZNode, err)
+	} else {
+		for _, consumer := range consumers {
+			topics, err := GetTopicsWithConsumser(mkafka.ZNode, mkafka.zkc, consumer)
+			if err != nil {
+				log.Errorf("get topic of consumer %v:%v failed , error %v", mkafka.ZNode, consumer, err)
+			} else {
+				for _, topic := range topics {
+					job := ConsumerTopic{
+						Topic:    topic,
+						Consumer: consumer,
+					}
+					mkafka.JobList = append(mkafka.JobList, job)
+				}
+			}
+		}
+	}
+	//控制并发数量.
+	doRequest(mkafka)
+
+}
+
+// NewMKafka start monitor kafka service
+func NewMKafka() ([]MKafka, time.Duration) {
 	flag.Parse()
 
 	//配置文件
@@ -162,38 +220,36 @@ func NewMKafka() []MKafka {
 		}
 
 		f := MKafka{
-			ZKList:    c.Cluster[m].ZKList,
-			ZNode:     c.Cluster[m].ZNode,
-			ToolDir:   c.ENV.KafkaToolDir,
-			LogFormat: c.LOG.LogFormat,
-			zkc:       zkcon,
-			SetLag:    lags,
-			Cluster:   m,
+			ZKList:       c.Cluster[m].ZKList,
+			ZNode:        c.Cluster[m].ZNode,
+			ToolDir:      c.ENV.KafkaToolDir,
+			LogFormat:    c.LOG.LogFormat,
+			zkc:          zkcon,
+			SetLag:       lags,
+			Cluster:      m,
+			TimeWait:     c.ENV.TimeWait,
+			TimeInterval: c.ENV.TimeInterval,
+			Concurrent:   c.ENV.Concurrent,
 		}
 		log.Infof("Load yaml conf %+v", f)
 		infos = append(infos, f)
 	}
 
 	log.Infof("parse config file : %v", infos)
-	return infos
+	return infos, c.ENV.Collect
 }
 
-func (mk MKafka) checkConsumer(consumer string) {
+// Do get consumers of topic offset
+func (mk MKafka) Do(job *Job) {
 
-	topics := GetTopicsWithConsumser(mk.ZNode, mk.zkc, consumer)
+	fmt.Printf("do job %v\n", job)
+	var outerr bytes.Buffer
 
-	for _, topic := range topics {
-		log.Infof("get topic %v ", topic)
-		mk.getConsumerOffset(consumer, topic)
-	}
-
-}
-
-func (mk MKafka) getConsumerOffset(consumer, topic string) {
-	//var stdout, outerr bytes.Buffer
 	// export JAVA_HOME=/usr/java/jdk1.7.0_67-cloudera
 	os.Setenv("JAVA_HOME", c.ENV.JAVAHOME)
-	cmd := exec.Command(mk.ToolDir+"/kafka-consumer-offset-checker.sh", "--zookeeper", strings.Join(mk.ZKList, ",")+mk.ZNode, "--topic", topic, "--group", consumer)
+	cmd := exec.Command(mk.ToolDir+"/kafka-consumer-offset-checker.sh", "--zookeeper", strings.Join(mk.ZKList, ",")+mk.ZNode, "--topic", job.jobname.Topic, "--group", job.jobname.Consumer)
+
+	jobstring := fmt.Sprintf("zkList:%v:%v --topic %v --group %v", strings.Join(mk.ZKList, ","), mk.ZNode, job.jobname.Topic, job.jobname.Consumer)
 
 	//命令执行
 	stdout, err := cmd.StdoutPipe()
@@ -204,15 +260,22 @@ func (mk MKafka) getConsumerOffset(consumer, topic string) {
 	err = cmd.Start()
 	checkErr(2, err)
 
-	defer cmd.Wait() // Doesn't block
+	done := make(chan error)
+
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	//直接输出
+	//go io.Copy(&out, stdout)
+	go io.Copy(&outerr, stderr)
 
 	// Non-blockingly echo command output to terminal
-	go io.Copy(os.Stderr, stderr)
+	//go io.Copy(os.Stderr, stderr)
 	//go io.Copy(os.Stdout, stdout)
 
 	scanner := bufio.NewScanner(stdout)
-
-	var total_lag, total_messages int64
+	var totalLag, totalMessages int64
 	partition := 0
 	for scanner.Scan() {
 		words := strings.Fields(scanner.Text())
@@ -230,36 +293,36 @@ func (mk MKafka) getConsumerOffset(consumer, topic string) {
 			if pid, err := strconv.Atoi(words[2]); err == nil {
 				data.Pid = pid
 			} else {
-				log.Errorf("change %s to int error %v", words[2], err)
+				log.Errorf("change '%s' to int error %v", words, err)
 				continue
 			}
 
 			if offset, err := strconv.ParseInt(words[3], 10, 64); err == nil {
 				data.Offset = offset
 			} else {
-				log.Errorf("change %s to int64 error %v", words[3], err)
+				log.Errorf("change '%s' to int64 error %v", words, err)
 				continue
 			}
 
 			if logsize, err := strconv.ParseInt(words[4], 10, 64); err == nil {
 				data.LogSize = logsize
 			} else {
-				log.Errorf("change %s to int64 error %v", words[4], err)
+				log.Errorf("change '%s' to int64 error %v", words, err)
 				continue
 			}
 
 			if lag, err := strconv.ParseInt(words[5], 10, 64); err == nil {
 				data.Lag = lag
 			} else {
-				log.Errorf("change %s to int64 error %v", words[5], err)
+				log.Errorf("change '%s' to int64 error %v", words, err)
 				continue
 			}
 
-			total_messages += data.LogSize
-			total_lag += data.Lag
-			partition += 1
+			totalMessages += data.LogSize
+			totalLag += data.Lag
+			partition++
 
-			if m, ok := mk.SetLag[consumer]; ok {
+			if m, ok := mk.SetLag[job.jobname.Consumer]; ok {
 				if data.Lag > m {
 					log.Warnf("[Consumer Detail Info] "+mk.LogFormat, data.Topic, data.Group, data.Pid, data.LogSize, data.Offset, data.Lag, mk.Cluster)
 				}
@@ -268,9 +331,35 @@ func (mk MKafka) getConsumerOffset(consumer, topic string) {
 			}
 		}
 	}
-	log.Infof("[Total Info] Topic:%v Consumer:%v Partition:%v Total_Messages:%v Total_Lag:%v Cluster:%s", topic, consumer, partition, total_messages, total_lag, mk.Cluster)
+	log.Infof("[Total Info] Topic:%v Consumer:%v Partition:%v Total_Messages:%v Total_Lag:%v Cluster:%s", job.jobname.Topic, job.jobname.Consumer, partition, totalMessages, totalLag, mk.Cluster)
+
+	//线程控制执行时间
+	select {
+	case <-time.After(mk.TimeWait):
+		//超时被杀时
+		if err := cmd.Process.Kill(); err != nil {
+			//超时被杀失败
+			job.results <- Result{jobstring, 3, "Killed..."}
+			checkErr(2, err)
+		}
+		<-done
+		job.results <- Result{jobstring, 2, "Time over ,Killed..."}
+		//记录失败job
+	case err := <-done:
+		if err != nil {
+			//完成返回失败
+			job.results <- Result{jobstring, 1, outerr.String()}
+		} else {
+
+			//完成返回成功
+			job.results <- Result{jobstring, 0, "success"}
+
+		}
+	}
+
 }
 
+// NewZk connect zookeeper
 func NewZk(zks []string) (*zk.Conn, error) {
 	c, _, err := zk.Connect(zks, time.Second*1)
 	if err != nil {
@@ -279,20 +368,17 @@ func NewZk(zks []string) (*zk.Conn, error) {
 	return c, nil
 }
 
-func GetConsumsers(zknode string, zkc *zk.Conn) []string {
+// GetConsumsers 获取consumer的列表
+func GetConsumsers(zknode string, zkc *zk.Conn) ([]string, error) {
 	consumers, _, err := zkc.Children(zknode + "/consumers")
-	checkErr(1, err)
-	return consumers
-
+	return consumers, err
 }
 
-func GetTopicsWithConsumser(zknode string, zkc *zk.Conn, consumer string) []string {
+// GetTopicsWithConsumser 获取topic对应的consumer
+func GetTopicsWithConsumser(zknode string, zkc *zk.Conn, consumer string) ([]string, error) {
 	getzknode := zknode + "/consumers/" + consumer + "/offsets"
 	topics, _, err := zkc.Children(getzknode)
-	if err != nil {
-		log.Errorf("get zknode %s error %v", getzknode, err)
-	}
-	return topics
+	return topics, err
 }
 
 func checkErr(i int, err error) {
@@ -317,6 +403,7 @@ func checkExist(filename string) bool {
 
 func syncLogger() {
 
+	// LogConfig seelog的配置文件
 	var LogConfig = `
 <seelog minlevel="info">
     <outputs formatid="common">
@@ -335,4 +422,51 @@ func syncLogger() {
 
 	logger, _ := log.LoggerFromConfigAsBytes([]byte(LogConfig))
 	log.UseLogger(logger)
+}
+
+//####################
+//并发调度过程
+//处理job对列
+//并发调度开始
+func doRequest(mk MKafka) {
+	jobs := make(chan Job, mk.Concurrent)
+	results := make(chan Result, len(mk.JobList))
+	done := make(chan struct{}, mk.Concurrent)
+
+	fmt.Printf("[%v] get jobList %v Concurrent %v \n", mk.Cluster, len(mk.JobList), mk.Concurrent)
+	go mk.addJob(jobs, mk.JobList, results)
+
+	for i := 0; i < mk.Concurrent; i++ {
+		go mk.doJob(done, jobs)
+	}
+
+	go mk.awaitCompletion(done, results, mk.Concurrent)
+}
+
+//添加job
+func (mk MKafka) addJob(jobs chan<- Job, jobnames []ConsumerTopic, results chan<- Result) {
+	for _, jobname := range jobnames {
+		fmt.Printf("add job %v\n", jobname)
+		jobs <- Job{jobname, results}
+	}
+	close(jobs)
+}
+
+//处理job
+func (mk MKafka) doJob(done chan<- struct{}, jobs <-chan Job) {
+
+	for job := range jobs {
+		fmt.Printf("do job %v\n", job)
+		mk.Do(&job)
+		time.Sleep(mk.TimeInterval)
+	}
+	done <- struct{}{}
+}
+
+//job完成状态
+func (mk MKafka) awaitCompletion(done <-chan struct{}, results chan Result, works int) {
+	for i := 0; i < works; i++ {
+		<-done
+	}
+	close(results)
 }
