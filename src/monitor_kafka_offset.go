@@ -37,10 +37,10 @@ var (
 	USERNAME = os.Getenv("username")
 	// HOME $HOME 位置
 	HOME       = os.Getenv("HOME")
-	configFile = flag.String("C", "mkafka.conf", "configure file.")
+	configFile = flag.String("C", "mkafka.yaml", "configure file.")
 	usage      = `
   Examples:
-  monitor_kafka_offset -C mkafka.conf
+  monitor_kafka_offset -C mkafka.yaml
 `
 )
 
@@ -143,10 +143,9 @@ func main() {
 
 		for n, m := range kafka {
 
-			fmt.Printf("[%v] start collect kafka information %v \n", n, m)
+			log.Tracef("[%v] start collect kafka information %v \n", n, m)
 
 			realMain(m)
-			// 可以配置并发数量与间隔时间.
 
 		}
 		time.Sleep(t)
@@ -242,7 +241,6 @@ func NewMKafka() ([]MKafka, time.Duration) {
 // Do get consumers of topic offset
 func (mk MKafka) Do(job *Job) {
 
-	fmt.Printf("do job %v\n", job)
 	var outerr bytes.Buffer
 
 	// export JAVA_HOME=/usr/java/jdk1.7.0_67-cloudera
@@ -433,7 +431,7 @@ func doRequest(mk MKafka) {
 	results := make(chan Result, len(mk.JobList))
 	done := make(chan struct{}, mk.Concurrent)
 
-	fmt.Printf("[%v] get jobList %v Concurrent %v \n", mk.Cluster, len(mk.JobList), mk.Concurrent)
+	log.Tracef("[%v] get jobList %v Concurrent %v \n", mk.Cluster, len(mk.JobList), mk.Concurrent)
 	go mk.addJob(jobs, mk.JobList, results)
 
 	for i := 0; i < mk.Concurrent; i++ {
@@ -446,7 +444,6 @@ func doRequest(mk MKafka) {
 //添加job
 func (mk MKafka) addJob(jobs chan<- Job, jobnames []ConsumerTopic, results chan<- Result) {
 	for _, jobname := range jobnames {
-		fmt.Printf("add job %v\n", jobname)
 		jobs <- Job{jobname, results}
 	}
 	close(jobs)
@@ -456,7 +453,6 @@ func (mk MKafka) addJob(jobs chan<- Job, jobnames []ConsumerTopic, results chan<
 func (mk MKafka) doJob(done chan<- struct{}, jobs <-chan Job) {
 
 	for job := range jobs {
-		fmt.Printf("do job %v\n", job)
 		mk.Do(&job)
 		time.Sleep(mk.TimeInterval)
 	}
